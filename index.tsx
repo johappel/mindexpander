@@ -11,10 +11,13 @@ const MODEL_NAME = 'gemini-2.5-flash';
 
 interface Note {
   id: string;
+  title: string;
   rawTranscription: string;
   polishedNoteMarkdown: string; // Stores raw Markdown for copy
   polishedNoteHtml: string;    // Stores HTML for display
+  summary: string;
   timestamp: number;
+  totalTokens: number;
 }
 
 class VoiceNotesApp {
@@ -35,6 +38,11 @@ class VoiceNotesApp {
   private stream: MediaStream | null = null;
   private editorTitle: HTMLDivElement;
   private hasAttemptedPermission = false;
+
+  // New elements for history sidebar
+  private historyList: HTMLDivElement;
+  private tokenCount: HTMLSpanElement;
+  private currentSessionTokens: number = 0;
 
   private recordingInterface: HTMLDivElement;
   private liveRecordingTitle: HTMLDivElement;
@@ -81,6 +89,10 @@ class VoiceNotesApp {
       '.editor-title',
     ) as HTMLDivElement;
 
+    // Initialize history sidebar elements
+    this.historyList = document.getElementById('historyList') as HTMLDivElement;
+    this.tokenCount = document.getElementById('tokenCount') as HTMLSpanElement;
+
     this.recordingInterface = document.querySelector(
       '.recording-interface',
     ) as HTMLDivElement;
@@ -113,6 +125,7 @@ class VoiceNotesApp {
 
     this.bindEventListeners();
     this.initTheme();
+    this.loadHistory();
     this.createNewNote(); 
 
     this.setRecordingStatus('Bereit zur Aufnahme');
@@ -593,8 +606,14 @@ class VoiceNotesApp {
         contents: contents,
       });
       
+      // Estimate tokens used for tracking
+      const inputTokens = this.estimateTokens(contents[0].text);
+      
       // FIX: Ensure response.text is resolved to a string, accommodating string | Promise<string>
       const transcriptionText: string = await Promise.resolve(response.text);
+      
+      const outputTokens = this.estimateTokens(transcriptionText);
+      this.addTokenUsage(inputTokens, outputTokens);
 
       if (transcriptionText) {
         this.setPanelContent(this.rawTranscription, transcriptionText);
@@ -653,8 +672,14 @@ ${rawTranscription}`;
         contents: contents,
       });
       
+      // Estimate tokens used for tracking
+      const inputTokens = this.estimateTokens(polishPrompt);
+      
       // FIX: Ensure response.text is resolved to a string, accommodating string | Promise<string>
       const polishedMarkdown: string = await Promise.resolve(response.text);
+      
+      const outputTokens = this.estimateTokens(polishedMarkdown);
+      this.addTokenUsage(inputTokens, outputTokens);
 
       if (polishedMarkdown) {
         const htmlContent = marked.parse(polishedMarkdown);
@@ -728,8 +753,14 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
         contents: contents,
       });
 
+      // Estimate tokens used for tracking
+      const inputTokens = this.estimateTokens(summaryPrompt);
+
       // FIX: Ensure response.text is resolved to a string, accommodating string | Promise<string>
       const updatedSummaryText: string = await Promise.resolve(response.text);
+      
+      const outputTokens = this.estimateTokens(updatedSummaryText);
+      this.addTokenUsage(inputTokens, outputTokens);
 
       if (updatedSummaryText) {
         this.currentSummary = updatedSummaryText; // Renamed variable
@@ -785,11 +816,229 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
       }
     }
     if (!noteTitleSet && this.editorTitle && this.editorTitle.textContent?.trim() === '' && !this.editorTitle.classList.contains('placeholder-active')) {
-        this.setPanelContent(this.editorTitle, ''); 
+      this.setPanelContent(this.editorTitle, '');
     }
   }
 
-  private setPanelContent(element: HTMLElement, content: string, isHtml = false): void {
+
+  private createNewNote(): void {
+    // Save current note to history before creating new one
+    if (this.currentNote && (this.currentNote.rawTranscription || this.currentNote.polishedNoteMarkdown)) {
+      this.saveNoteToHistory(this.currentNote);
+    }
+
+    this.currentNote = {
+      id: `note_${Date.now()}`,
+      title: '',
+      rawTranscription: '',
+      polishedNoteMarkdown: '',
+      polishedNoteHtml: '',
+      summary: '',
+      timestamp: Date.now(),
+      totalTokens: 0,
+    };
+    this.currentSummary = ""; // Renamed variable
+    this.currentSessionTokens = 0;
+
+    this.setPanelContent(this.rawTranscription, '');
+    this.setPanelContent(this.polishedNote, '', true); 
+    this.setPanelContent(this.summaryDisplay, '', true); // Renamed element
+    
+    if (this.editorTitle) {
+      this.setPanelContent(this.editorTitle, '');
+    }
+    this.setRecordingStatus('Bereit zur Aufnahme');
+    this.updateTokenDisplay();
+
+    if (this.isRecording) {
+      if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
+        this.mediaRecorder.stop();
+      }
+      this.isRecording = false;
+      this.recordButton.classList.remove('recording');
+      this.stopLiveDisplay(); 
+       if (this.stream) {
+        this.stream.getTracks().forEach((track) => track.stop());
+        this.stream = null;
+      }
+    } else {
+      this.stopLiveDisplay();
+    }
+
+    // Update history display
+    this.updateHistoryActiveState();
+  }
+
+  // History management methods
+  private saveNoteToHistory(note: Note): void {
+    const history = this.getHistory();
+    
+    // Update note title and summary
+    note.title = this.extractTitle(note.polishedNoteMarkdown) || 'Unbenannte Notiz';
+    note.summary = this.currentSummary;
+    note.totalTokens = this.currentSessionTokens;
+    
+    // Check if note already exists (update) or is new
+    const existingIndex = history.findIndex(h => h.id === note.id);
+    if (existingIndex >= 0) {
+      history[existingIndex] = note;
+    } else {
+      history.unshift(note); // Add to beginning
+    }
+    
+    // Keep only last 50 notes
+    const limitedHistory = history.slice(0, 50);
+    localStorage.setItem('voiceNotesHistory', JSON.stringify(limitedHistory));
+    
+    this.renderHistory();
+  }
+
+  private getHistory(): Note[] {
+    try {
+      const stored = localStorage.getItem('voiceNotesHistory');
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.error('Error loading history:', e);
+      return [];
+    }
+  }
+
+  private loadHistory(): void {
+    this.renderHistory();
+  }
+
+  private renderHistory(): void {
+    const history = this.getHistory();
+    
+    if (!this.historyList) return;
+    
+    this.historyList.innerHTML = '';
+    
+    if (history.length === 0) {
+      this.historyList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--color-text-tertiary);">Noch keine Notizen</div>';
+      return;
+    }
+    
+    history.forEach(note => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      item.setAttribute('data-note-id', note.id);
+      
+      const date = new Date(note.timestamp).toLocaleDateString('de-DE', {
+        day: '2-digit',
+        month: '2-digit',
+        year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      const tokenInfo = note.totalTokens > 0 ? `<span class="history-item-tokens">${note.totalTokens.toLocaleString()} T</span>` : '';
+      
+      item.innerHTML = `
+        <div class="history-item-title">${note.title || 'Unbenannte Notiz'}</div>
+        <div class="history-item-date">${date} ${tokenInfo}</div>
+      `;
+      
+      item.addEventListener('click', () => this.loadNoteFromHistory(note.id));
+      this.historyList.appendChild(item);
+    });
+  }
+
+  private loadNoteFromHistory(noteId: string): void {
+    const history = this.getHistory();
+    const note = history.find(h => h.id === noteId);
+    
+    if (!note) return;
+    
+    // Save current note if it has content
+    if (this.currentNote && (this.currentNote.rawTranscription || this.currentNote.polishedNoteMarkdown)) {
+      this.saveNoteToHistory(this.currentNote);
+    }
+    
+    // Load the selected note
+    this.currentNote = { ...note };
+    this.currentSummary = note.summary || '';
+    this.currentSessionTokens = note.totalTokens || 0;
+    
+    // Update UI
+    this.setPanelContent(this.rawTranscription, note.rawTranscription || '');
+    this.setPanelContent(this.polishedNote, note.polishedNoteHtml || '', true);
+    this.setPanelContent(this.summaryDisplay, note.summary ? marked.parse(note.summary) : '', true);
+    
+    if (this.editorTitle) {
+      this.setPanelContent(this.editorTitle, note.title || '');
+    }
+    
+    this.updateTokenDisplay();
+    this.updateHistoryActiveState();
+    this.setRecordingStatus('Notiz geladen - Bereit zur Aufnahme');
+  }
+
+  private updateHistoryActiveState(): void {
+    if (!this.historyList || !this.currentNote) return;
+    
+    // Remove active class from all items
+    this.historyList.querySelectorAll('.history-item').forEach(item => {
+      item.classList.remove('active');
+    });
+    
+    // Add active class to current note
+    const currentItem = this.historyList.querySelector(`[data-note-id="${this.currentNote.id}"]`);
+    if (currentItem) {
+      currentItem.classList.add('active');
+    }
+  }
+
+  private extractTitle(markdown: string): string {
+    if (!markdown) return '';
+    
+    const lines = markdown.split('\n').map(l => l.trim());
+    
+    // Look for H1 heading
+    for (const line of lines) {
+      if (line.startsWith('# ')) {
+        return line.substring(2).trim();
+      }
+    }
+    
+    // Look for first meaningful line
+    for (const line of lines) {
+      if (line.length > 0 && !line.startsWith('#')) {
+        return line.length > 50 ? line.substring(0, 47) + '...' : line;
+      }
+    }
+    
+    return '';
+  }
+
+  // Token counting methods
+  private updateTokenDisplay(): void {
+    if (this.tokenCount) {
+      if (this.currentSessionTokens > 0) {
+        this.tokenCount.textContent = `${this.currentSessionTokens.toLocaleString()} Tokens`;
+        this.tokenCount.classList.add('visible');
+      } else {
+        this.tokenCount.classList.remove('visible');
+      }
+    }
+  }
+
+  private estimateTokens(text: string): number {
+    // Rough estimation: 1 token ≈ 0.75 words for German text
+    const words = text.split(/\s+/).length;
+    return Math.ceil(words / 0.75);
+  }
+
+  private addTokenUsage(inputTokens: number, outputTokens: number): void {
+    const totalUsed = inputTokens + outputTokens;
+    this.currentSessionTokens += totalUsed;
+    
+    if (this.currentNote) {
+      this.currentNote.totalTokens = this.currentSessionTokens;
+    }
+    
+    this.updateTokenDisplay();
+  }  private setPanelContent(element: HTMLElement, content: string, isHtml = false): void {
     const placeholder = element.getAttribute('placeholder') || '';
     if (!content || content.trim() === '') {
       if (isHtml) {
@@ -809,41 +1058,7 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
   }
 
 
-  private createNewNote(): void {
-    this.currentNote = {
-      id: `note_${Date.now()}`,
-      rawTranscription: '',
-      polishedNoteMarkdown: '',
-      polishedNoteHtml: '',
-      timestamp: Date.now(),
-    };
-    this.currentSummary = ""; // Renamed variable
-
-    this.setPanelContent(this.rawTranscription, '');
-    this.setPanelContent(this.polishedNote, '', true); 
-    this.setPanelContent(this.summaryDisplay, '', true); // Renamed element
-    
-    if (this.editorTitle) {
-      this.setPanelContent(this.editorTitle, '');
-    }
-    this.setRecordingStatus('Bereit zur Aufnahme');
-
-    if (this.isRecording) {
-      if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
-        this.mediaRecorder.onstop = null; 
-        this.mediaRecorder.stop();
-      }
-      this.isRecording = false;
-      this.recordButton.classList.remove('recording');
-      this.stopLiveDisplay(); 
-       if (this.stream) {
-          this.stream.getTracks().forEach((track) => track.stop());
-          this.stream = null;
-        }
-    } else {
-      this.stopLiveDisplay();
-    }
-  }
+  // History management methods
 }
 
 document.addEventListener('DOMContentLoaded', () => {

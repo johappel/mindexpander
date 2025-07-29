@@ -23,6 +23,14 @@
 </head>
   <body>
     <div class="app-container">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h2>Verlauf</h2>
+        </div>
+        <div id="historyList" class="history-list">
+          <!-- Verlauf wird hier eingefügt -->
+        </div>
+      </div>
       <div class="main-content">
         <div class="note-area">
           <div class="note-header">
@@ -71,6 +79,7 @@
 
           <div class="status-indicator">
             <span id="recordingStatus" class="status-text">Bereit zur Aufnahme</span>
+            <span id="tokenCount" class="token-count"></span>
           </div>
 
           <div class="recording-controls">
