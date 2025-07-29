@@ -1,0 +1,8 @@
+{
+  "name": "MindCompletionApp",
+  "description": "Effortless dictation powered by Gemini. Voice Input to structured Markdown",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": ""
+}
