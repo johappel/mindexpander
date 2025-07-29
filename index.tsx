@@ -144,6 +144,19 @@ class VoiceNotesApp {
         event.preventDefault();
       }
     });
+
+    // Update title when editor title changes
+    this.editorTitle.addEventListener('blur', () => {
+      if (this.currentNote && this.editorTitle) {
+        const newTitle = this.editorTitle.textContent?.trim() || '';
+        if (newTitle && newTitle !== 'Unbenannter Entwurf') {
+          this.currentNote.title = newTitle;
+          this.updateNoteTitle(this.currentNote.id, newTitle);
+          this.renderHistory();
+          this.updateHistoryActiveState();
+        }
+      }
+    });
   }
 
   private handleResize(): void {
@@ -685,7 +698,7 @@ ${rawTranscription}`;
         const htmlContent = marked.parse(polishedMarkdown);
         this.setPanelContent(this.polishedNote, htmlContent, true);
         
-        this.updateEditorTitle(polishedMarkdown);
+        // Removed automatic title generation - users can set titles manually
 
         if (this.currentNote) {
             this.currentNote.polishedNoteMarkdown = polishedMarkdown;
@@ -783,44 +796,6 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
   }
 
 
-  private updateEditorTitle(polishedMarkdown: string): void {
-    let noteTitleSet = false;
-    const lines = polishedMarkdown.split('\n').map((l) => l.trim());
-
-    for (const line of lines) {
-      if (line.startsWith('# ')) { 
-        const title = line.replace(/^#\s+/, '').trim();
-        if (this.editorTitle && title) {
-          this.setPanelContent(this.editorTitle, title);
-          noteTitleSet = true;
-          break;
-        }
-      }
-    }
-
-    if (!noteTitleSet && this.editorTitle) {
-      for (const line of lines) {
-        if (line.length > 0 && !line.startsWith('#')) { 
-          let potentialTitle = line.replace(/^[\*_\`\->\s\[\]\(.\d)]+/, '');
-          potentialTitle = potentialTitle.replace(/[\*_\`#]+$/, '');
-          potentialTitle = potentialTitle.trim();
-
-          if (potentialTitle.length > 3) {
-            const maxLength = 60;
-            this.setPanelContent(this.editorTitle, potentialTitle.substring(0, maxLength) +
-              (potentialTitle.length > maxLength ? '...' : ''));
-            noteTitleSet = true;
-            break;
-          }
-        }
-      }
-    }
-    if (!noteTitleSet && this.editorTitle && this.editorTitle.textContent?.trim() === '' && !this.editorTitle.classList.contains('placeholder-active')) {
-      this.setPanelContent(this.editorTitle, '');
-    }
-  }
-
-
   private createNewNote(): void {
     // Save current note to history before creating new one
     if (this.currentNote && (this.currentNote.rawTranscription || this.currentNote.polishedNoteMarkdown)) {
@@ -873,8 +848,7 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
   private saveNoteToHistory(note: Note): void {
     const history = this.getHistory();
     
-    // Update note title and summary
-    note.title = this.extractTitle(note.polishedNoteMarkdown) || 'Unbenannte Notiz';
+    // Update note summary and tokens (title stays as manually set)
     note.summary = this.currentSummary;
     note.totalTokens = this.currentSessionTokens;
     
@@ -935,11 +909,41 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
       const tokenInfo = note.totalTokens > 0 ? `<span class="history-item-tokens">${note.totalTokens.toLocaleString()} T</span>` : '';
       
       item.innerHTML = `
-        <div class="history-item-title">${note.title || 'Unbenannte Notiz'}</div>
-        <div class="history-item-date">${date} ${tokenInfo}</div>
+        <div class="history-item-header">
+          <div class="history-item-content">
+            <div class="history-item-title" data-original-title="${note.title || 'Unbenannte Notiz'}">${note.title || 'Unbenannte Notiz'}</div>
+            <div class="history-item-date">${date} ${tokenInfo}</div>
+          </div>
+          <div class="history-item-actions">
+            <button class="history-action-btn edit" title="Titel bearbeiten">
+              <i class="fas fa-edit"></i>
+            </button>
+            <button class="history-action-btn delete" title="Notiz löschen">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </div>
       `;
       
-      item.addEventListener('click', () => this.loadNoteFromHistory(note.id));
+      // Add click handler for loading note (only on content area)
+      const contentArea = item.querySelector('.history-item-content') as HTMLElement;
+      contentArea.addEventListener('click', () => this.loadNoteFromHistory(note.id));
+      
+      // Add edit title functionality
+      const editBtn = item.querySelector('.edit') as HTMLButtonElement;
+      const titleElement = item.querySelector('.history-item-title') as HTMLElement;
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.editNoteTitle(note.id, titleElement);
+      });
+      
+      // Add delete functionality
+      const deleteBtn = item.querySelector('.delete') as HTMLButtonElement;
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteNote(note.id);
+      });
+      
       this.historyList.appendChild(item);
     });
   }
@@ -950,8 +954,16 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
     
     if (!note) return;
     
-    // Save current note if it has content
+    // Save current note if it has content and preserve any title changes
     if (this.currentNote && (this.currentNote.rawTranscription || this.currentNote.polishedNoteMarkdown)) {
+      // Preserve current title from editor before saving
+      if (this.editorTitle) {
+        const currentEditorTitle = this.editorTitle.textContent?.trim() || '';
+        if (currentEditorTitle && currentEditorTitle !== this.currentNote.title) {
+          this.currentNote.title = currentEditorTitle;
+          this.updateNoteTitle(this.currentNote.id, currentEditorTitle);
+        }
+      }
       this.saveNoteToHistory(this.currentNote);
     }
     
@@ -965,6 +977,7 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
     this.setPanelContent(this.polishedNote, note.polishedNoteHtml || '', true);
     this.setPanelContent(this.summaryDisplay, note.summary ? marked.parse(note.summary) : '', true);
     
+    // Load the title from the selected note
     if (this.editorTitle) {
       this.setPanelContent(this.editorTitle, note.title || '');
     }
@@ -987,28 +1000,6 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
     if (currentItem) {
       currentItem.classList.add('active');
     }
-  }
-
-  private extractTitle(markdown: string): string {
-    if (!markdown) return '';
-    
-    const lines = markdown.split('\n').map(l => l.trim());
-    
-    // Look for H1 heading
-    for (const line of lines) {
-      if (line.startsWith('# ')) {
-        return line.substring(2).trim();
-      }
-    }
-    
-    // Look for first meaningful line
-    for (const line of lines) {
-      if (line.length > 0 && !line.startsWith('#')) {
-        return line.length > 50 ? line.substring(0, 47) + '...' : line;
-      }
-    }
-    
-    return '';
   }
 
   // Token counting methods
@@ -1038,6 +1029,104 @@ Aktualisierte Zusammenfassung (Markdown, Deutsch):`;
     }
     
     this.updateTokenDisplay();
+  }
+
+  // Edit and delete functionality
+  private editNoteTitle(noteId: string, titleElement: HTMLElement): void {
+    const originalTitle = titleElement.getAttribute('data-original-title') || 'Unbenannte Notiz';
+    
+    // Create input element
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = originalTitle;
+    input.className = 'history-item-title editable';
+    input.style.width = '100%';
+    input.style.fontSize = 'inherit';
+    input.style.fontFamily = 'inherit';
+    input.style.fontWeight = 'inherit';
+    
+    // Replace title with input
+    titleElement.style.display = 'none';
+    titleElement.parentNode?.insertBefore(input, titleElement);
+    
+    // Focus and select text
+    input.focus();
+    input.select();
+    
+    const saveEdit = () => {
+      const newTitle = input.value.trim() || 'Unbenannte Notiz';
+      
+      // Update in storage
+      this.updateNoteTitle(noteId, newTitle);
+      
+      // Update display
+      titleElement.textContent = newTitle;
+      titleElement.setAttribute('data-original-title', newTitle);
+      titleElement.style.display = '';
+      input.remove();
+      
+      // If this is the current note, update the editor title
+      if (this.currentNote && this.currentNote.id === noteId) {
+        this.currentNote.title = newTitle;
+        if (this.editorTitle) {
+          this.setPanelContent(this.editorTitle, newTitle);
+        }
+      }
+    };
+    
+    const cancelEdit = () => {
+      titleElement.style.display = '';
+      input.remove();
+    };
+    
+    // Event handlers
+    input.addEventListener('blur', saveEdit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
+  }
+
+  private updateNoteTitle(noteId: string, newTitle: string): void {
+    const history = this.getHistory();
+    const noteIndex = history.findIndex(h => h.id === noteId);
+    
+    if (noteIndex >= 0) {
+      history[noteIndex].title = newTitle;
+      localStorage.setItem('voiceNotesHistory', JSON.stringify(history));
+    }
+  }
+
+  private deleteNote(noteId: string): void {
+    // Show confirmation dialog
+    const confirmDelete = confirm('Möchten Sie diese Notiz wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.');
+    
+    if (!confirmDelete) return;
+    
+    const history = this.getHistory();
+    const noteIndex = history.findIndex(h => h.id === noteId);
+    
+    if (noteIndex >= 0) {
+      // Remove from history
+      history.splice(noteIndex, 1);
+      localStorage.setItem('voiceNotesHistory', JSON.stringify(history));
+      
+      // If this was the current note, create a new one
+      if (this.currentNote && this.currentNote.id === noteId) {
+        this.createNewNote();
+      } else {
+        // Just refresh the history display
+        this.renderHistory();
+        this.updateHistoryActiveState();
+      }
+      
+      this.setRecordingStatus(`Notiz gelöscht. ${history.length} Notizen verbleiben.`);
+    }
   }  private setPanelContent(element: HTMLElement, content: string, isHtml = false): void {
     const placeholder = element.getAttribute('placeholder') || '';
     if (!content || content.trim() === '') {

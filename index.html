@@ -39,9 +39,10 @@
             </div>
             <div class="tab-navigation-container">
               <div class="tab-navigation">
-                <button class="tab-button active" data-tab="polished">Überarbeitet</button>
-                <button class="tab-button" data-tab="raw">Transcript</button>
-                <button class="tab-button" data-tab="summary">Zusammenfassung</button>
+                <button class="tab-button active" data-tab="summary">💡 Strukturierte Zusammenfassung</button>
+                <button class="tab-button" data-tab="polished">⬅️ Übertragung</button>
+                <button class="tab-button" data-tab="raw">🎙️ Transcript</button>
+                
                 <div class="active-tab-indicator"></div>
               </div>
             </div>
@@ -49,8 +50,13 @@
 
           <div class="note-content-wrapper">
             <div
-              id="polishedNote"
+              id="summaryDisplay"
               class="note-content active"
+              placeholder="Ihre fortlaufende Zusammenfassung erscheint hier..."
+            ></div>
+            <div
+              id="polishedNote"
+              class="note-content"
               contenteditable="true"
               placeholder="Ihre überarbeiteten Notizen erscheinen hier..."
             ></div>
@@ -59,11 +65,6 @@
               class="note-content"
               contenteditable="true"
               placeholder="Das Roh-Transkript erscheint hier..."
-            ></div>
-            <div
-              id="summaryDisplay"
-              class="note-content"
-              placeholder="Ihre fortlaufende Zusammenfassung erscheint hier..."
             ></div>
           </div>
         </div>
